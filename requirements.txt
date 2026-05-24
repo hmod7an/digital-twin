@@ -5,8 +5,8 @@ websockets==13.1
 python-multipart==0.0.18
 
 # ── AI / Vision ────────────────────────────────────────────────────────────
-mediapipe==0.10.21
-onnxruntime==1.20.1
+mediapipe==0.10.35
+onnxruntime==1.19.2
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 pillow==11.1.0
