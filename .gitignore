@@ -10,3 +10,8 @@ __pycache__/
 *.tmp
 reports/
 datasets/data/
+# Tunnel binaries (large, platform-specific)
+cloudflared.exe
+cloudflared
+# Generated session CSVs
+app/session_*.csv
