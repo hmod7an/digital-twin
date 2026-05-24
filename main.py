@@ -26,6 +26,12 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+# Force software GL before any mediapipe/OpenCV import
+os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+os.environ.setdefault("MESA_GL_VERSION_OVERRIDE", "3.3")
+os.environ.setdefault("EGL_PLATFORM", "surfaceless")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
@@ -375,6 +381,20 @@ async def ws_endpoint(ws: WebSocket):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "face-health-digital-twin"}
+
+
+@app.get("/status")
+async def status():
+    """Diagnostic endpoint — shows what's loaded and what failed."""
+    import importlib, sys
+    checks = {}
+    for mod in ["mediapipe", "cv2", "numpy", "scipy", "onnxruntime", "fastapi"]:
+        try:
+            m = importlib.import_module(mod)
+            checks[mod] = getattr(m, "__version__", "ok")
+        except Exception as e:
+            checks[mod] = f"ERROR: {e}"
+    return {"python": sys.version, "packages": checks}
 
 
 if __name__ == "__main__":
