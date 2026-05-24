@@ -37,7 +37,10 @@ from vitals.fatigue import FatigueDetector
 from vitals.stress import StressEstimator
 from vitals.breathing import BreathingEstimator
 from vitals.attention import AttentionEstimator
-from ai.emotion_engine import EmotionEngine, EMOTION_COLOR, EMOTION_STATES
+from ai.emotion_engine import (
+    EmotionEngine, EmotionResult, EMOTION_COLOR, EMOTION_STATES,
+    EMOTION_EMOJI as _ENG_EMOJI,
+)
 from ai.state_fusion import StateFusion, MentalStateResult
 from prediction.health_risk import HealthRiskPredictor
 
@@ -92,36 +95,101 @@ def _wellbeing_color(s):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Web-optimised emotion engine — fast-commit on strong deep-model evidence
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WebEmotionEngine(EmotionEngine):
+    """
+    Subclass of EmotionEngine with an extra fast-commit layer.
+
+    When the deep ONNX model is highly confident (≥ FAST_COMMIT_THRESHOLD)
+    on a clear facial expression, we skip the frame-counter requirement and
+    commit the state immediately.  This makes expressions feel instant while
+    the EMA smoothing still prevents random flickering.
+
+    Only the four most visually distinct states are fast-committed to avoid
+    false triggers on ambiguous micro-expressions.
+    """
+    FAST_COMMIT_THRESHOLD = 0.65   # deep-model confidence to trigger instant switch
+    FAST_COMMIT_STATES    = frozenset({"Happy", "Sad", "Angry", "Surprised"})
+
+    def update(self, features, fatigue_score, stress_score,
+               bpm, blink_rate, perclos, deep_scores=None):
+        result = super().update(
+            features, fatigue_score, stress_score,
+            bpm, blink_rate, perclos, deep_scores,
+        )
+
+        if (deep_scores
+                and not result.is_calibrating
+                and self._frame_count > self.WARM_UP_FRAMES):
+            best_deep = max(deep_scores, key=deep_scores.get)
+            conf = deep_scores[best_deep]
+
+            if (conf >= self.FAST_COMMIT_THRESHOLD
+                    and best_deep in self.FAST_COMMIT_STATES
+                    and best_deep != self._current):
+                # Force the engine's internal state so EMA biases next frames
+                self._prev_state        = self._current
+                self._current           = best_deep
+                self._candidate         = best_deep
+                self._candidate_frames  = 0
+                self._frames_in_current = 0
+
+                return EmotionResult(
+                    state=best_deep,
+                    emoji=_ENG_EMOJI.get(best_deep, "😐"),
+                    color=EMOTION_COLOR.get(best_deep, "#9CA3AF"),
+                    confidence=round(conf, 3),
+                    scores=result.scores,
+                    is_stable=True,
+                    smile_score=result.smile_score,
+                    furrow_score=result.furrow_score,
+                    frown_score=result.frown_score,
+                    inner_brow_raise=result.inner_brow_raise,
+                    facial_energy=result.facial_energy,
+                    stability_score=round(conf, 3),
+                    persistence_seconds=0.0,
+                    is_calibrating=False,
+                    timeline_dominant=result.timeline_dominant,
+                )
+
+        return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Global session store — avoids gr.State serializing unpicklable objects
 # ─────────────────────────────────────────────────────────────────────────────
 _SESSIONS: dict[str, dict] = {}
 
 
-_WEB_FPS    = 7.0    # target streaming fps (stream_every=0.15)
+_WEB_FPS    = 10.0   # target streaming fps (stream_every=0.10)
 _DESK_FPS   = 30.0   # fps EmotionEngine was tuned for
-_FPS_RATIO  = _WEB_FPS / _DESK_FPS   # ≈ 0.233 — scale frame counts down
-_ALPHA_SCALE = _DESK_FPS / _WEB_FPS  # ≈ 4.286 — scale EMA alpha up
+_FPS_RATIO  = _WEB_FPS / _DESK_FPS   # ≈ 0.333 — scale frame counts down
+_ALPHA_SCALE = _DESK_FPS / _WEB_FPS  # ≈ 3.0   — scale EMA alpha up
 
 def _scaled_ema_alpha() -> dict:
-    """Scale class EMA alphas so time-constants (seconds) match desktop at 7 fps."""
-    base = EmotionEngine._EMA_ALPHA
-    return {s: min(0.85, a * _ALPHA_SCALE) for s, a in base.items()}
+    """Scale EMA alphas so time-constants in seconds match desktop at 10 fps."""
+    return {s: min(0.82, a * _ALPHA_SCALE)
+            for s, a in EmotionEngine._EMA_ALPHA.items()}
 
 def _scaled_min_frames() -> dict:
-    """Scale MIN_FRAMES so commit latency (seconds) matches desktop at 7 fps."""
-    base = EmotionEngine._MIN_FRAMES
-    return {s: max(2, round(n * _FPS_RATIO)) for s, n in base.items()}
+    """Scale MIN_FRAMES so commit latency in seconds matches desktop at 10 fps."""
+    return {s: max(2, round(n * _FPS_RATIO))
+            for s, n in EmotionEngine._MIN_FRAMES.items()}
 
 def _new_session() -> dict:
-    # Feature extractor — halve calibration frames for web fps
+    # Feature extractor — calibration proportional to web fps
     fe = FeatureExtractor()
-    fe._CAL_FRAMES = max(5, round(30 * _FPS_RATIO))  # ≈15 frames @ 7fps ≈ 1s cal
+    fe._CAL_FRAMES = max(5, round(30 * _FPS_RATIO))  # ≈10 frames @ 10fps ≈ 1s
 
-    # Emotion engine — fps-scaled EMA and commit thresholds for temporal parity
-    emo = EmotionEngine()
-    emo.WARM_UP_FRAMES = max(10, round(60 * _FPS_RATIO))  # ≈14 frames @ 7fps ≈ 2s
-    emo._EMA_ALPHA  = _scaled_ema_alpha()   # instance override — faster response
-    emo._MIN_FRAMES = _scaled_min_frames()  # instance override — same latency (s)
+    # Emotion engine — WebEmotionEngine for fast-commit + fps-scaled thresholds
+    emo = WebEmotionEngine()
+    emo.WARM_UP_FRAMES      = max(10, round(60 * _FPS_RATIO))  # ≈20 frames ≈ 2s
+    emo._EMA_ALPHA          = _scaled_ema_alpha()   # faster response at web fps
+    emo._MIN_FRAMES         = _scaled_min_frames()  # same commit latency in seconds
+    emo.INERTIA_BONUS       = 0.015  # reduced from 0.05 — less resistance to change
+    emo.CONFIDENCE_THRESHOLD = 0.14  # lower bar — web fps produces noisier signals
 
     return {
         "tracker":        FaceTracker(),
@@ -135,15 +203,15 @@ def _new_session() -> dict:
         "attention":      AttentionEstimator(),
         "risk":           HealthRiskPredictor(),
         "fusion":         StateFusion(),
-        # Histories start empty so charts don't show 60 fake zeros
-        "bpm_hist":       deque(maxlen=90),
-        "fat_hist":       deque(maxlen=90),
-        "str_hist":       deque(maxlen=90),
-        "wb_hist":        deque(maxlen=90),
-        "emo_label_hist": deque(maxlen=120),
-        "score_hist":     deque(maxlen=90),
+        # Histories — 120-slot deque covers 12s at 10fps
+        "bpm_hist":       deque(maxlen=120),
+        "fat_hist":       deque(maxlen=120),
+        "str_hist":       deque(maxlen=120),
+        "wb_hist":        deque(maxlen=120),
+        "emo_label_hist": deque(maxlen=150),
+        "score_hist":     deque(maxlen=120),
         "tick":           0,
-        # FPS measurement
+        # FPS measurement (rolling 30-frame window)
         "fps_times":      deque(maxlen=30),
         "fps":            0.0,
         # Recording
@@ -248,8 +316,8 @@ def _process_inner(frame: np.ndarray, sid: str, session: dict):
     if emotion_r.scores:
         session["score_hist"].append(dict(emotion_r.scores))
 
-    # Recording snapshot every ~2 s (14 ticks × 0.15 s ≈ 2.1 s at 7 fps)
-    if session["recording"] and tick - session["last_snap_tick"] >= 14:
+    # Recording snapshot every ~2 s (20 ticks × 0.10 s = 2.0 s at 10 fps)
+    if session["recording"] and tick - session["last_snap_tick"] >= 20:
         session["last_snap_tick"] = tick
         session["records"].append({
             "time":       datetime.now().strftime("%H:%M:%S"),
@@ -267,7 +335,8 @@ def _process_inner(frame: np.ndarray, sid: str, session: dict):
 
     face_ok = landmarks is not None
 
-    system_html   = _system_html(face_ok, deep_emo.available, emotion_r.is_calibrating, tick, session["fps"])
+    system_html   = _system_html(face_ok, deep_emo.available, emotion_r.is_calibrating,
+                                  tick, session["fps"], deep_emo.gpu_active)
     vital_html    = _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r, session)
     emotion_html  = _emotion_main_html(emotion_r)
     emo_bars_html = _emotion_bars_html(emotion_r)
@@ -275,8 +344,8 @@ def _process_inner(frame: np.ndarray, sid: str, session: dict):
     wellbeing_html = _facial_signals_html(face_feats)
     record_html   = _record_html(session)
 
-    # Rebuild plots every 5 ticks (~0.75 s at 7 fps)
-    if tick % 5 == 0 or "_last_figs" not in session:
+    # Rebuild plots every 10 ticks (1.0 s at 10 fps) — reduces CPU on chart gen
+    if tick % 10 == 0 or "_last_figs" not in session:
         rppg_fig  = _rppg_figure(rppg_r.signal, rppg_r.bpm)
         trend_fig = _trend_figure(session)
         emo_fig   = _emotion_timeline_figure(session)
@@ -432,15 +501,17 @@ def _sub(text: str) -> str:
 
 # ── System status / header ─────────────────────────────────────────────────────
 
-def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int, fps: float = 0.0) -> str:
-    live_col  = _GREEN if face_ok else _RED
-    live_lbl  = "🟢  LIVE" if face_ok else "🔴  NO FACE"
-    live_anim = "animation:_livePulse 1.4s ease-in-out infinite;" if face_ok else ""
+def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int,
+                  fps: float = 0.0, gpu: bool = False) -> str:
+    live_col = _GREEN if face_ok else _RED
+    live_dot = f'<span style="color:{live_col};animation:_livePulse 1.2s ease-in-out infinite;display:inline-block;">●</span>'
     fd  = f'<span style="color:{_GREEN};">●</span>' if face_ok  else f'<span style="color:{_RED};">●</span>'
-    dd  = f'<span style="color:{_CYAN};">●</span>' if deep_ok   else f'<span style="color:{_GRAY};">●</span>'
+    dd  = f'<span style="color:{_CYAN};">●</span>'  if deep_ok  else f'<span style="color:{_GRAY};">●</span>'
     cd  = f'<span style="color:{_YELLOW};">●</span>' if calibrating else f'<span style="color:{_GREEN};">●</span>'
-    fps_col = _GREEN if fps >= 5 else (_YELLOW if fps >= 2 else _GRAY)
+    gd  = f'<span style="color:{_PURPLE};">●</span>' if gpu else f'<span style="color:{_GRAY};">●</span>'
+    fps_col = _GREEN if fps >= 8 else (_YELLOW if fps >= 4 else _GRAY)
     fps_str = f"{fps:.1f} fps" if fps > 0 else "-- fps"
+    live_lbl = "LIVE" if face_ok else "NO FACE"
     return (
         f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
         f'background:{_HEADER};border:1px solid {_BORDER};border-radius:12px;'
@@ -449,15 +520,18 @@ def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int, fps
         f'<span style="color:{_CYAN};font-weight:800;font-size:16px;letter-spacing:1px;">'
         f'🩺  Face Health Digital Twin</span>'
         f'<span style="color:{_GRAY2};font-size:10px;letter-spacing:0.5px;margin-top:1px;">'
-        f'Real-time AI health monitoring  |  rPPG · Fatigue · Stress · Emotion · Attention · Wellbeing'
+        f'Real-time AI · rPPG · Fatigue · Stress · Emotion · Attention · Wellbeing'
         f'</span></div>'
-        f'<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-left:auto;">'
-        f'<span style="color:#9CA3AF;font-size:12px;">{fd} {"FACE DETECTED" if face_ok else "NO FACE"}</span>'
-        f'<span style="color:#9CA3AF;font-size:12px;">{dd} {"DEEP AI" if deep_ok else "DEEP AI OFFLINE"}</span>'
-        f'<span style="color:#9CA3AF;font-size:12px;">{cd} {"CALIBRATING" if calibrating else "SYSTEM READY"}</span>'
-        f'<span style="color:{fps_col};font-size:11px;font-variant-numeric:tabular-nums;">{fps_str}</span>'
-        f'<span style="color:#4B5563;font-size:11px;font-variant-numeric:tabular-nums;">#{tick:,}</span>'
-        f'<span style="font-size:13px;font-weight:bold;color:{live_col};{live_anim}">{live_lbl}</span>'
+        f'<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-left:auto;">'
+        f'<span style="color:#9CA3AF;font-size:11px;">{fd} {"FACE" if face_ok else "NO FACE"}</span>'
+        f'<span style="color:#9CA3AF;font-size:11px;">{dd} {"DEEP AI" if deep_ok else "AI OFFLINE"}</span>'
+        f'<span style="color:#9CA3AF;font-size:11px;">{gd} {"GPU" if gpu else "CPU"}</span>'
+        f'<span style="color:#9CA3AF;font-size:11px;">{cd} {"CAL…" if calibrating else "READY"}</span>'
+        f'<span style="color:{fps_col};font-size:11px;font-variant-numeric:tabular-nums;'
+        f'font-weight:600;">{fps_str}</span>'
+        f'<span style="color:#374151;font-size:10px;font-variant-numeric:tabular-nums;">#{tick:,}</span>'
+        f'<span style="font-size:13px;font-weight:700;color:{live_col};">'
+        f'{live_dot}&nbsp;{live_lbl}</span>'
         f'</div>'
         f'</div>'
     )
@@ -946,38 +1020,68 @@ def _emotion_timeline_figure(session: dict) -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CSS = """
+/* ── Keyframe animations ─────────────────────────────────── */
 @keyframes _livePulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.35; }
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.85); }
 }
 @keyframes _cardIn {
-    from { opacity: 0; transform: translateY(5px); }
+    from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
 }
+@keyframes _shimmer {
+    0%   { background-position: -400px 0; }
+    100% { background-position: 400px 0; }
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
 body, .gradio-container {
     background: #0B0F1A !important;
     color: #E2E8F0 !important;
-    font-family: "Segoe UI","Consolas",monospace !important;
+    font-family: "Segoe UI", system-ui, -apple-system, monospace !important;
     font-size: 13px !important;
     font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }
 footer { display: none !important; }
+
+/* ── Buttons ──────────────────────────────────────────────── */
 .gr-button-primary, button.primary {
-    background: linear-gradient(135deg,#00D4FF,#0090CC) !important;
-    color: #000 !important; font-weight: bold !important;
+    background: linear-gradient(135deg, #00D4FF 0%, #0095CC 100%) !important;
+    color: #000 !important; font-weight: 700 !important;
     border-radius: 8px !important; border: none !important;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.12s ease, transform 0.12s ease !important;
+    box-shadow: 0 2px 8px rgba(0,212,255,0.25) !important;
 }
-button { border-radius: 8px !important; transition: opacity 0.15s ease; }
+.gr-button-primary:hover, button.primary:hover {
+    opacity: 0.88 !important; transform: translateY(-1px) !important;
+}
+button {
+    border-radius: 8px !important;
+    transition: opacity 0.12s ease !important;
+}
+
+/* ── Labels ───────────────────────────────────────────────── */
 .label-wrap label, .block label span {
     color: #64748B !important; font-size: 10px !important;
     font-weight: 700 !important; letter-spacing: 2px !important;
     text-transform: uppercase !important;
 }
+
+/* ── Camera / image ───────────────────────────────────────── */
 .gr-image, .image-container img {
-    border-radius: 10px !important; border: 1px solid #1E2A3A !important;
+    border-radius: 10px !important;
+    border: 1px solid #1E2A3A !important;
+    will-change: contents;
 }
+
+/* ── Panels ───────────────────────────────────────────────── */
 .block, .panel { background: #0B0F1A !important; border-color: #1E2A3A !important; }
+
+/* ── Accordion ────────────────────────────────────────────── */
 details summary {
     background: #141925 !important; border: 1px solid #1E2A3A !important;
     border-radius: 8px !important; color: #64748B !important;
@@ -988,23 +1092,31 @@ details > div {
     background: #0F1520 !important; border: 1px solid #1E2A3A !important;
     border-top: none !important; border-radius: 0 0 8px 8px !important;
 }
+
+/* ── Markdown prose ───────────────────────────────────────── */
 .prose h1 { color: #00D4FF !important; font-size: 16px !important; }
 .prose h2 { color: #9CA3AF !important; font-size: 13px !important; }
 .prose h3 { color: #64748B !important; font-size: 12px !important; }
-.prose p,.prose li { color: #9CA3AF !important; font-size: 12px; }
+.prose p, .prose li { color: #9CA3AF !important; font-size: 12px; }
 .prose table { border-collapse: collapse; width: 100%; }
 .prose th { background:#141925; color:#00D4FF; font-size:11px;
             padding:6px 10px; border:1px solid #1E2A3A; }
 .prose td { font-size:11px; color:#D1D5DB; padding:5px 10px; border:1px solid #1E2A3A; }
 .prose tr:nth-child(even) td { background:#111827; }
-::-webkit-scrollbar { width:6px; }
-::-webkit-scrollbar-track { background:#141925; border-radius:3px; }
-::-webkit-scrollbar-thumb { background:#2A3040; border-radius:3px; }
-.plot-container { background:#0B0F1A !important; }
-/* smooth bar transitions — already inline but override here for gr defaults */
-.progress-bar { transition: width 0.35s cubic-bezier(0.4,0,0.2,1) !important; }
-@media (max-width:900px) { .image-container { max-height:260px !important; } }
-@media (max-width:600px) { .image-container { max-height:200px !important; } }
+
+/* ── Scrollbars ───────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #141925; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #2A3040; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3A4055; }
+
+/* ── Charts ───────────────────────────────────────────────── */
+.plot-container { background: #0B0F1A !important; }
+.js-plotly-plot .plotly { will-change: contents; }
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 900px) { .image-container { max-height: 260px !important; } }
+@media (max-width: 600px) { .image-container { max-height: 200px !important; } }
 """
 
 
@@ -1114,7 +1226,7 @@ def build_ui():
                 session_state,
             ],
             # time_limit removed — was 60 s, caused stream to auto-stop and freeze all outputs
-            stream_every=0.15,  # ~7 fps; fast enough for responsive EMA + calibration
+            stream_every=0.10,  # 10 fps — 43% faster than before; parallel ONNX handles the load
         )
 
         # ── Recording button handlers ─────────────────────────────────
