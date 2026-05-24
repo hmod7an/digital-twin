@@ -15,7 +15,7 @@ Launch:
     python run_web.py                  # local  → http://localhost:7860
     python run_web.py --share          # public HTTPS tunnel (mobile camera)
 """
-import sys, os, uuid, csv, io, traceback
+import sys, os, uuid, csv, io, traceback, time
 from datetime import datetime
 import cv2
 import numpy as np
@@ -97,14 +97,31 @@ def _wellbeing_color(s):
 _SESSIONS: dict[str, dict] = {}
 
 
-def _new_session() -> dict:
-    # Feature extractor — halve calibration frames for web (lower fps)
-    fe = FeatureExtractor()
-    fe._CAL_FRAMES = 15          # 2 s at 7 fps  (vs 1 s at 30 fps desktop)
+_WEB_FPS    = 7.0    # target streaming fps (stream_every=0.15)
+_DESK_FPS   = 30.0   # fps EmotionEngine was tuned for
+_FPS_RATIO  = _WEB_FPS / _DESK_FPS   # ≈ 0.233 — scale frame counts down
+_ALPHA_SCALE = _DESK_FPS / _WEB_FPS  # ≈ 4.286 — scale EMA alpha up
 
-    # Emotion engine — shorten warm-up for web fps
+def _scaled_ema_alpha() -> dict:
+    """Scale class EMA alphas so time-constants (seconds) match desktop at 7 fps."""
+    base = EmotionEngine._EMA_ALPHA
+    return {s: min(0.85, a * _ALPHA_SCALE) for s, a in base.items()}
+
+def _scaled_min_frames() -> dict:
+    """Scale MIN_FRAMES so commit latency (seconds) matches desktop at 7 fps."""
+    base = EmotionEngine._MIN_FRAMES
+    return {s: max(2, round(n * _FPS_RATIO)) for s, n in base.items()}
+
+def _new_session() -> dict:
+    # Feature extractor — halve calibration frames for web fps
+    fe = FeatureExtractor()
+    fe._CAL_FRAMES = max(5, round(30 * _FPS_RATIO))  # ≈15 frames @ 7fps ≈ 1s cal
+
+    # Emotion engine — fps-scaled EMA and commit thresholds for temporal parity
     emo = EmotionEngine()
-    emo.WARM_UP_FRAMES = 30      # 4.3 s at 7 fps  (vs 2 s at 30 fps desktop)
+    emo.WARM_UP_FRAMES = max(10, round(60 * _FPS_RATIO))  # ≈14 frames @ 7fps ≈ 2s
+    emo._EMA_ALPHA  = _scaled_ema_alpha()   # instance override — faster response
+    emo._MIN_FRAMES = _scaled_min_frames()  # instance override — same latency (s)
 
     return {
         "tracker":        FaceTracker(),
@@ -126,6 +143,9 @@ def _new_session() -> dict:
         "emo_label_hist": deque(maxlen=120),
         "score_hist":     deque(maxlen=90),
         "tick":           0,
+        # FPS measurement
+        "fps_times":      deque(maxlen=30),
+        "fps":            0.0,
         # Recording
         "recording":      False,
         "records":        [],
@@ -206,6 +226,13 @@ def _process_inner(frame: np.ndarray, sid: str, session: dict):
     ann_bgr = session["tracker"].draw_landmarks(bgr, landmarks) if landmarks else bgr
     ann_rgb = cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB)
 
+    # FPS measurement (rolling window over last 30 frames)
+    now = time.monotonic()
+    session["fps_times"].append(now)
+    ft = session["fps_times"]
+    if len(ft) >= 2:
+        session["fps"] = (len(ft) - 1) / (ft[-1] - ft[0])
+
     # Tick-based history updates
     session["tick"] += 1
     tick = session["tick"]
@@ -240,8 +267,8 @@ def _process_inner(frame: np.ndarray, sid: str, session: dict):
 
     face_ok = landmarks is not None
 
-    system_html   = _system_html(face_ok, deep_emo.available, emotion_r.is_calibrating, tick)
-    vital_html    = _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r)
+    system_html   = _system_html(face_ok, deep_emo.available, emotion_r.is_calibrating, tick, session["fps"])
+    vital_html    = _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r, session)
     emotion_html  = _emotion_main_html(emotion_r)
     emo_bars_html = _emotion_bars_html(emotion_r)
     secondary_html = _ai_row_html(attention_r, mental_r)
@@ -405,12 +432,15 @@ def _sub(text: str) -> str:
 
 # ── System status / header ─────────────────────────────────────────────────────
 
-def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int) -> str:
-    live_col = _GREEN if face_ok else _RED
-    live_lbl = "🟢  LIVE" if face_ok else "🔴  NO FACE"
+def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int, fps: float = 0.0) -> str:
+    live_col  = _GREEN if face_ok else _RED
+    live_lbl  = "🟢  LIVE" if face_ok else "🔴  NO FACE"
+    live_anim = "animation:_livePulse 1.4s ease-in-out infinite;" if face_ok else ""
     fd  = f'<span style="color:{_GREEN};">●</span>' if face_ok  else f'<span style="color:{_RED};">●</span>'
     dd  = f'<span style="color:{_CYAN};">●</span>' if deep_ok   else f'<span style="color:{_GRAY};">●</span>'
     cd  = f'<span style="color:{_YELLOW};">●</span>' if calibrating else f'<span style="color:{_GREEN};">●</span>'
+    fps_col = _GREEN if fps >= 5 else (_YELLOW if fps >= 2 else _GRAY)
+    fps_str = f"{fps:.1f} fps" if fps > 0 else "-- fps"
     return (
         f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;'
         f'background:{_HEADER};border:1px solid {_BORDER};border-radius:12px;'
@@ -425,8 +455,9 @@ def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int) -> 
         f'<span style="color:#9CA3AF;font-size:12px;">{fd} {"FACE DETECTED" if face_ok else "NO FACE"}</span>'
         f'<span style="color:#9CA3AF;font-size:12px;">{dd} {"DEEP AI" if deep_ok else "DEEP AI OFFLINE"}</span>'
         f'<span style="color:#9CA3AF;font-size:12px;">{cd} {"CALIBRATING" if calibrating else "SYSTEM READY"}</span>'
-        f'<span style="color:#4B5563;font-size:11px;">#{tick:,}</span>'
-        f'<span style="font-size:13px;font-weight:bold;color:{live_col};">{live_lbl}</span>'
+        f'<span style="color:{fps_col};font-size:11px;font-variant-numeric:tabular-nums;">{fps_str}</span>'
+        f'<span style="color:#4B5563;font-size:11px;font-variant-numeric:tabular-nums;">#{tick:,}</span>'
+        f'<span style="font-size:13px;font-weight:bold;color:{live_col};{live_anim}">{live_lbl}</span>'
         f'</div>'
         f'</div>'
     )
@@ -434,15 +465,34 @@ def _system_html(face_ok: bool, deep_ok: bool, calibrating: bool, tick: int) -> 
 
 # ── Vital cards + Risk banner ─────────────────────────────────────────────────
 
-def _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r) -> str:
+def _trend_arrow(hist: deque, window: int = 7) -> str:
+    """Compare last `window` values vs the window before that; return ↑ ↓ or →."""
+    lst = list(hist)
+    if len(lst) < window * 2:
+        return ""
+    recent = sum(lst[-window:]) / window
+    prev   = sum(lst[-window * 2:-window]) / window
+    delta  = recent - prev
+    if abs(delta) < 1.0:
+        return f' <span style="color:{_GRAY};font-size:13px;">→</span>'
+    return (f' <span style="color:{_GREEN};font-size:13px;">↑</span>' if delta > 0
+            else f' <span style="color:{_RED};font-size:13px;">↓</span>')
 
-    def _vcard(icon, title, val, unit, val_color, accent, sub, fill):
+
+def _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r, session: dict = None) -> str:
+
+    def _vcard(icon, title, val, unit, val_color, accent, sub, fill, arrow=""):
         return (
             f'<div style="flex:1;min-width:155px;background:{_PANEL};'
             f'border:1px solid {_BORDER};border-top:4px solid {accent};'
             f'border-radius:12px;padding:12px 14px 14px;">'
             + _section_hdr(icon, title)
-            + _big_value(val, unit, val_color)
+            + f'<div style="display:flex;align-items:baseline;gap:4px;margin:4px 0 2px;">'
+            + f'<span style="font-size:38px;font-weight:800;color:{val_color};'
+            + f'letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums;">{val}</span>'
+            + f'<span style="font-size:14px;color:#94A3B8;font-weight:600;">{unit}</span>'
+            + arrow
+            + f'</div>'
             + _sub(sub)
             + _bar(fill, val_color, 8)
             + f'</div>'
@@ -475,10 +525,14 @@ def _vital_html(rppg_r, fatigue_r, stress_r, breath_r, risk_r) -> str:
         br_sub  = "Estimating breathing pattern…"
         br_fill = 0.0
 
+    bpm_arrow = _trend_arrow(session["bpm_hist"]) if session else ""
+    fat_arrow = _trend_arrow(session["fat_hist"]) if session else ""
+    str_arrow = _trend_arrow(session["str_hist"]) if session else ""
+
     cards = "".join([
-        _vcard("❤️","HEART RATE", bpm_val,"BPM",  bpm_col,_HR_ACCENT,     bpm_sub,bpm_fill),
-        _vcard("😴","FATIGUE",    f"{fatigue_r.score:.0f}","%",fat_col,_FATIGUE_ACCENT,fat_sub,fatigue_r.score/100),
-        _vcard("🧠","STRESS",     f"{stress_r.score:.0f}", "%",str_col,_STRESS_ACCENT, str_sub,stress_r.score/100),
+        _vcard("❤️","HEART RATE", bpm_val,"BPM",  bpm_col,_HR_ACCENT,     bpm_sub,bpm_fill, bpm_arrow),
+        _vcard("😴","FATIGUE",    f"{fatigue_r.score:.0f}","%",fat_col,_FATIGUE_ACCENT,fat_sub,fatigue_r.score/100, fat_arrow),
+        _vcard("🧠","STRESS",     f"{stress_r.score:.0f}", "%",str_col,_STRESS_ACCENT, str_sub,stress_r.score/100, str_arrow),
         _vcard("🫁","BREATHING",  br_val,"/min",  br_col, _BREATH_ACCENT,  br_sub,br_fill),
     ])
 
@@ -892,19 +946,29 @@ def _emotion_timeline_figure(session: dict) -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CSS = """
+@keyframes _livePulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}
+@keyframes _cardIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
 body, .gradio-container {
     background: #0B0F1A !important;
     color: #E2E8F0 !important;
     font-family: "Segoe UI","Consolas",monospace !important;
     font-size: 13px !important;
+    font-variant-numeric: tabular-nums;
 }
 footer { display: none !important; }
 .gr-button-primary, button.primary {
     background: linear-gradient(135deg,#00D4FF,#0090CC) !important;
     color: #000 !important; font-weight: bold !important;
     border-radius: 8px !important; border: none !important;
+    transition: opacity 0.15s ease;
 }
-button { border-radius: 8px !important; }
+button { border-radius: 8px !important; transition: opacity 0.15s ease; }
 .label-wrap label, .block label span {
     color: #64748B !important; font-size: 10px !important;
     font-weight: 700 !important; letter-spacing: 2px !important;
@@ -937,6 +1001,8 @@ details > div {
 ::-webkit-scrollbar-track { background:#141925; border-radius:3px; }
 ::-webkit-scrollbar-thumb { background:#2A3040; border-radius:3px; }
 .plot-container { background:#0B0F1A !important; }
+/* smooth bar transitions — already inline but override here for gr defaults */
+.progress-bar { transition: width 0.35s cubic-bezier(0.4,0,0.2,1) !important; }
 @media (max-width:900px) { .image-container { max-height:260px !important; } }
 @media (max-width:600px) { .image-container { max-height:200px !important; } }
 """
