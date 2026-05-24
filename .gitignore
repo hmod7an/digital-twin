@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.gradio/
+.streamlit/
+.claude/
+*.log
+*.tmp
+reports/
+datasets/data/
