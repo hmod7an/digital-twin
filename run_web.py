@@ -3,23 +3,61 @@ Face Health Digital Twin — Web Launcher
 
 Usage:
     python run_web.py                   # local → http://localhost:7860
-    python run_web.py --share           # public Gradio link (72-h free tunnel)
+    python run_web.py --share           # public HTTPS tunnel via localhost.run
     python run_web.py --share --auth    # with login prompt
     python run_web.py --port 8080       # custom port
 """
 import argparse
 import sys
 import os
+import subprocess
+import threading
+import re
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 
+def _start_localtunnel(port: int):
+    """
+    Open an SSH reverse tunnel to localhost.run and print the public HTTPS URL.
+    Runs in a background thread; does not block the Gradio server.
+    """
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-R", f"80:localhost:{port}",
+        "nokey@localhost.run",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        for line in proc.stdout:
+            # localhost.run prints the URL on the line that contains "lhr.life"
+            m = re.search(r"(https://[^\s]+\.lhr\.life)", line)
+            if m:
+                url = m.group(1)
+                print("\n" + "=" * 60)
+                print("  PUBLIC URL (mobile / external access):")
+                print(f"  {url}")
+                print("=" * 60 + "\n", flush=True)
+    except FileNotFoundError:
+        print("  [share] ssh not found — cannot open tunnel", flush=True)
+    except Exception as e:
+        print(f"  [share] tunnel error: {e}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Face Health Digital Twin — Web App")
     parser.add_argument("--share",  action="store_true",
-                        help="Create a public Gradio tunnel link (72 hours)")
+                        help="Create a public HTTPS tunnel via localhost.run")
     parser.add_argument("--auth",   action="store_true",
                         help="Require username/password (demo / demo1234)")
     parser.add_argument("--port",   type=int, default=7860,
@@ -39,8 +77,13 @@ def main():
     print("=" * 60)
     print()
 
+    if args.share:
+        t = threading.Thread(target=_start_localtunnel, args=(args.port,), daemon=True)
+        t.start()
+
     from app.web_app import launch
-    launch(share=args.share, auth=auth_pair, port=args.port)
+    # share=False — we handle the tunnel ourselves via localhost.run
+    launch(share=False, auth=auth_pair, port=args.port)
 
 
 if __name__ == "__main__":
