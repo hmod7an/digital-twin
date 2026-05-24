@@ -18,6 +18,10 @@ services:
         value: "1"
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
+      - key: LIBGL_ALWAYS_SOFTWARE
+        value: "1"
+      - key: MESA_GL_VERSION_OVERRIDE
+        value: "3.3"
 
     # Auto-deploy on every push to main branch
     autoDeploy: true
