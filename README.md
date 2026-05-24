@@ -1,3 +1,15 @@
+---
+title: Face Health Digital Twin
+emoji: 🩺
+colorFrom: blue
+colorTo: cyan
+sdk: gradio
+sdk_version: "6.14.0"
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # Face Health Digital Twin
 ### Real-Time Vital Sign Estimation and Stress-Fatigue Prediction
 
