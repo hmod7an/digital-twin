@@ -19,10 +19,24 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 
+def _print_qr(url: str):
+    """Print a scannable QR code for the URL in the terminal."""
+    try:
+        import qrcode
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        print()
+        qr.print_ascii(invert=True)
+        print()
+    except ImportError:
+        pass  # qrcode package not installed — skip silently
+
+
 def _start_localtunnel(port: int):
     """
-    Open an SSH reverse tunnel to localhost.run and print the public HTTPS URL.
-    Runs in a background thread; does not block the Gradio server.
+    Open an SSH reverse tunnel to localhost.run and print the public HTTPS URL
+    plus a scannable QR code. Runs in a background thread.
     """
     cmd = [
         "ssh",
@@ -40,14 +54,16 @@ def _start_localtunnel(port: int):
             text=True,
         )
         for line in proc.stdout:
-            # localhost.run prints the URL on the line that contains "lhr.life"
             m = re.search(r"(https://[^\s]+\.lhr\.life)", line)
             if m:
                 url = m.group(1)
                 print("\n" + "=" * 60)
                 print("  PUBLIC URL (mobile / external access):")
                 print(f"  {url}")
-                print("=" * 60 + "\n", flush=True)
+                print("=" * 60)
+                print("  Scan with your phone camera:")
+                _print_qr(url)
+                print(flush=True)
     except FileNotFoundError:
         print("  [share] ssh not found — cannot open tunnel", flush=True)
     except Exception as e:
