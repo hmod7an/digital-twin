@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Face Health Digital Twin</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="header-left">
+    <span class="header-title">🩺 Face Health Digital Twin</span>
+    <span class="header-sub">Real-time AI · rPPG · Fatigue · Stress · Emotion · Attention</span>
+  </div>
+  <div class="header-badges">
+    <span id="badge-face"  class="badge badge-off">● FACE</span>
+    <span id="badge-ai"    class="badge badge-off">● DEEP AI</span>
+    <span id="badge-gpu"   class="badge badge-off">● GPU</span>
+    <span id="badge-cal"   class="badge badge-warn">● CAL…</span>
+    <span id="badge-fps"   class="badge badge-off">-- fps</span>
+    <span id="badge-tick"  class="badge badge-dim">#0</span>
+    <span id="badge-live"  class="badge badge-off">● OFFLINE</span>
+  </div>
+</header>
+
+<!-- ── Connection Banner ─────────────────────────────────────────────────── -->
+<div id="conn-banner" class="conn-banner conn-connecting">
+  <span id="conn-text">⚡ Connecting to backend…</span>
+  <button id="conn-retry" class="btn-sm" onclick="App.reconnect()" style="display:none">Retry</button>
+</div>
+
+<!-- ── Camera Row ────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="camera-row">
+    <div class="cam-panel">
+      <div class="panel-label">📷 LIVE CAMERA</div>
+      <div class="cam-wrap">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="capture-canvas" style="display:none"></canvas>
+        <div id="cam-overlay" class="cam-overlay">
+          <button id="btn-start" class="btn-primary" onclick="App.startCamera()">▶ Start Camera</button>
+        </div>
+      </div>
+    </div>
+    <div class="cam-panel">
+      <div class="panel-label">🔍 ANNOTATED FEED</div>
+      <div class="cam-wrap">
+        <img id="annotated" src="" alt="Waiting for detection…" />
+        <div id="ann-overlay" class="cam-overlay">
+          <span style="color:#64748B;font-size:13px;">Waiting for camera…</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Vital Cards ───────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="vitals-row">
+    <div class="vcard" id="card-hr">
+      <div class="vcard-label">❤️ HEART RATE</div>
+      <div class="vcard-value"><span id="bpm-val">--</span><span class="vcard-unit">BPM</span><span id="bpm-arrow" class="arrow"></span></div>
+      <div class="vcard-sub" id="bpm-sub">Calibrating…</div>
+      <div class="bar-track"><div class="bar-fill" id="bpm-bar" style="width:0%"></div></div>
+    </div>
+    <div class="vcard" id="card-fat">
+      <div class="vcard-label">😴 FATIGUE</div>
+      <div class="vcard-value"><span id="fat-val">--</span><span class="vcard-unit">%</span><span id="fat-arrow" class="arrow"></span></div>
+      <div class="vcard-sub" id="fat-sub">Calculating…</div>
+      <div class="bar-track"><div class="bar-fill" id="fat-bar" style="width:0%"></div></div>
+    </div>
+    <div class="vcard" id="card-str">
+      <div class="vcard-label">🧠 STRESS</div>
+      <div class="vcard-value"><span id="str-val">--</span><span class="vcard-unit">%</span><span id="str-arrow" class="arrow"></span></div>
+      <div class="vcard-sub" id="str-sub">Calculating…</div>
+      <div class="bar-track"><div class="bar-fill" id="str-bar" style="width:0%"></div></div>
+    </div>
+    <div class="vcard" id="card-br">
+      <div class="vcard-label">🫁 BREATHING</div>
+      <div class="vcard-value"><span id="br-val">--</span><span class="vcard-unit">/min</span></div>
+      <div class="vcard-sub" id="br-sub">Estimating…</div>
+      <div class="bar-track"><div class="bar-fill" id="br-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Risk Banner -->
+  <div id="risk-banner" class="risk-banner risk-normal">
+    <div id="risk-title">✅ SYSTEM STATUS: NORMAL</div>
+    <div id="risk-msg" class="risk-msg">All vitals in healthy range</div>
+  </div>
+</section>
+
+<!-- ── Emotion ──────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="emotion-row">
+    <!-- Main emotion card -->
+    <div class="panel emotion-main" id="emotion-main">
+      <div class="panel-hdr">🧬 EMOTIONAL STATE</div>
+      <div class="emo-state-row">
+        <span id="emo-emoji" class="emo-emoji">😐</span>
+        <div>
+          <div id="emo-state" class="emo-state-text">Neutral</div>
+          <div id="emo-persist" class="emo-sub">⏳ Calibrating…</div>
+          <div id="emo-tag" class="emo-tag"></div>
+        </div>
+      </div>
+      <div class="small-label">Confidence</div>
+      <div class="bar-track"><div class="bar-fill bar-purple" id="emo-conf-bar" style="width:0%"></div></div>
+      <div id="emo-conf-txt" class="small-val">0%</div>
+      <div class="small-label" style="margin-top:6px">Stability</div>
+      <div class="bar-track"><div class="bar-fill bar-cyan" id="emo-stab-bar" style="width:0%"></div></div>
+      <div class="emo-dominant-row">
+        <div class="small-label">30s DOMINANT</div>
+        <div><span id="emo-dom-emoji">😐</span> <span id="emo-dom-state" class="emo-dom-text">Neutral</span></div>
+      </div>
+    </div>
+
+    <!-- Emotion bars -->
+    <div class="panel emotion-bars">
+      <div class="panel-hdr cyan">🎭 EMOTION CONFIDENCE SCORES</div>
+      <div id="emo-bars-list"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── AI Row: Attention + Wellbeing + Insights ─────────────────────────── -->
+<section class="section">
+  <div class="ai-row">
+    <div class="panel ai-card" id="card-attn">
+      <div class="panel-hdr">🎯 ATTENTION</div>
+      <div class="vcard-value"><span id="attn-val">--</span><span class="vcard-unit">%</span></div>
+      <div id="attn-level" class="vcard-sub">Calculating…</div>
+      <div class="bar-track"><div class="bar-fill" id="attn-bar" style="width:0%;background:#00D4FF"></div></div>
+      <div class="mini-bars">
+        <div class="mini-label">Cog. Load</div>
+        <div class="bar-track"><div class="bar-fill" id="cog-bar" style="width:0%;background:#FF8C00"></div></div>
+        <div class="mini-label">Gaze</div>
+        <div class="bar-track"><div class="bar-fill" id="gaze-bar" style="width:0%;background:#00D4FF"></div></div>
+        <div class="mini-label">Head Stability</div>
+        <div class="bar-track" style="margin-bottom:0"><div class="bar-fill" id="stab-bar" style="width:0%;background:#00FF88"></div></div>
+      </div>
+    </div>
+
+    <div class="panel ai-card" id="card-wb">
+      <div class="panel-hdr">🌡️ WELLBEING</div>
+      <div class="vcard-value"><span id="wb-val">--</span><span class="vcard-unit">%</span></div>
+      <div id="wb-label" class="vcard-sub">Calculating…</div>
+      <div class="bar-track"><div class="bar-fill" id="wb-bar" style="width:0%;background:#00FF88"></div></div>
+    </div>
+
+    <div class="panel insights-card">
+      <div class="panel-hdr cyan">💡 AI INSIGHTS</div>
+      <div id="insights-list" class="insights-list">
+        <div class="insight-item muted">Collecting data…</div>
+      </div>
+      <div id="recs-section" style="display:none;margin-top:8px">
+        <div class="small-label">RECOMMENDATIONS</div>
+        <div id="recs-list" class="recs-list"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Facial Signal Analysis ────────────────────────────────────────────── -->
+<section class="section">
+  <div class="panel">
+    <div class="panel-hdr purple">📡 FACIAL SIGNAL ANALYSIS</div>
+    <div id="facial-grid" class="facial-grid">
+      <div class="muted">No face detected</div>
+    </div>
+    <div id="facial-pose" class="facial-pose"></div>
+  </div>
+</section>
+
+<!-- ── Recording ─────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="panel">
+    <div class="rec-header">
+      <div class="panel-hdr">📹 RECORDING</div>
+      <span id="rec-badge" class="rec-badge stopped">⏹ STOPPED</span>
+      <span id="rec-count" class="rec-count">0 snapshots</span>
+    </div>
+    <div class="rec-buttons">
+      <button id="btn-rec-start" class="btn-primary" onclick="App.startRecording()">📹 Start Recording</button>
+      <button id="btn-rec-stop"  class="btn-stop"    onclick="App.stopRecording()"  disabled>⏹ Stop</button>
+      <button id="btn-rec-clear" class="btn-sec"     onclick="App.clearRecording()">🗑 Clear</button>
+      <button id="btn-rec-dl"    class="btn-sec"     onclick="App.downloadCSV()"    disabled>💾 Download CSV</button>
+    </div>
+    <div id="rec-table-wrap" class="rec-table-wrap">
+      <div class="muted">No data yet — press Start Recording to begin.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Charts ─────────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="charts-row">
+    <div class="chart-panel">
+      <div class="chart-label">❤️ rPPG Pulse Signal</div>
+      <canvas id="chart-rppg"></canvas>
+    </div>
+    <div class="chart-panel">
+      <div class="chart-label">📊 Vital Trends</div>
+      <canvas id="chart-trend"></canvas>
+    </div>
+    <div class="chart-panel">
+      <div class="chart-label">🎭 Emotion Scores</div>
+      <canvas id="chart-emo"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- ── About ──────────────────────────────────────────────────────────────── -->
+<section class="section">
+  <details class="accordion">
+    <summary>📖 Quick Start Guide</summary>
+    <div class="accordion-body">
+      <ol>
+        <li>Click <strong>▶ Start Camera</strong> and allow browser camera access.</li>
+        <li>Sit <strong>30–60 cm</strong> from the camera in good, stable lighting.</li>
+        <li>Keep your face visible during the first few seconds of calibration.</li>
+        <li>Watch the status change to <strong>READY</strong> — readings update in real-time.</li>
+        <li>Use <strong>Start Recording</strong> to capture a timestamped CSV session log.</li>
+      </ol>
+      <p class="muted" style="margin-top:8px">⚠️ For educational and research use only. Not a medical device.</p>
+    </div>
+  </details>
+  <details class="accordion" style="margin-top:8px">
+    <summary>🔬 How It Works</summary>
+    <div class="accordion-body">
+      <table class="info-table">
+        <tr><th>Signal</th><th>Technology</th><th>Latency</th></tr>
+        <tr><td>Heart Rate</td><td>rPPG — POS algorithm</td><td>~10 s warm-up</td></tr>
+        <tr><td>Fatigue</td><td>EAR + PERCLOS + blink rate</td><td>Instant</td></tr>
+        <tr><td>Stress</td><td>HRV proxy + brow tension</td><td>~5 s</td></tr>
+        <tr><td>Breathing</td><td>Nose-tip RSA oscillation</td><td>~8 s</td></tr>
+        <tr><td>Emotion</td><td>EfficientNet-B0 + FACS geometry</td><td>~1.5 s</td></tr>
+        <tr><td>Attention</td><td>Head stability + gaze + blink</td><td>Instant</td></tr>
+      </table>
+    </div>
+  </details>
+</section>
+
+<footer class="page-footer">
+  Face Health Digital Twin · Educational &amp; Research Use Only · Not a Medical Device
+</footer>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

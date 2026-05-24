@@ -1,17 +1,52 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
 *.egg-info/
+.venv/
+venv/
+env/
+*.egg
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project-specific
 .gradio/
 .streamlit/
 .claude/
 *.log
 *.tmp
 reports/
-datasets/data/
-# Tunnel binaries (large, platform-specific)
+datasets/
+app/session_*.csv
+
+# Hugging Face (legacy)
+hf_app.py
+deploy_to_hf.py
+packages.txt
+README_HF.md
+
+# Binaries / tunnels
 cloudflared.exe
 cloudflared
-# Generated session CSVs
-app/session_*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets (never commit these)
+.env
+.env.*
+secrets.json

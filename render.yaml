@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: face-health-digital-twin
+    runtime: python
+    plan: starter           # 512 MB RAM, 0.5 CPU — upgrade if OOM
+    region: oregon          # closest to most users; change as needed
+
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+
+    # Auto-deploy on every push to main branch
+    autoDeploy: true
