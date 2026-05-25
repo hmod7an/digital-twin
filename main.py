@@ -148,7 +148,8 @@ def _new_session() -> dict:
         "wb_hist":    deque(maxlen=120),
         "score_hist": deque(maxlen=120),
         "emo_hist":   deque(maxlen=150),
-        "tick":       0,
+        "tick":             0,
+        "last_deep_scores": None,
         "recording":  False,
         "records":    [],
         "last_snap":  0,
@@ -170,14 +171,16 @@ def _process_frame(bgr: np.ndarray, session: dict) -> dict:
         landmarks, rppg_r.signal[-1] if len(rppg_r.signal) > 0 else None
     )
 
-    deep_scores = None
-    deep_emo    = session["deep_emo"]
-    if landmarks is not None and deep_emo.available:
+    # Run ONNX every 3rd frame; reuse cached scores in between for speed.
+    deep_emo = session["deep_emo"]
+    run_onnx = (session["tick"] % 3 == 0)
+    if run_onnx and landmarks is not None and deep_emo.available:
         x, y, wb, hb = landmarks.face_bbox
         if wb > 20 and hb > 20:
             fh, fw = bgr.shape[:2]
             crop = bgr[max(0, y):min(fh, y + hb), max(0, x):min(fw, x + wb)]
-            deep_scores = deep_emo.predict(crop)
+            session["last_deep_scores"] = deep_emo.predict(crop)
+    deep_scores = session.get("last_deep_scores")
 
     emotion_r   = session["emotion"].update(
         face_feats, fatigue_r.score, stress_r.score,

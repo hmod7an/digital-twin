@@ -107,16 +107,17 @@ class EmotionEngine:
     }
 
     # Consecutive dominant frames required before committing to a state.
+    # At 1 fps (free-tier backend), each frame = ~1 real second.
     _MIN_FRAMES: Dict[str, int] = {
-        "Neutral":    15,
-        "Happy":      15,
-        "Sad":        18,   # was 30 — reduced so deep model can commit faster
-        "Angry":      22,   # was 35
-        "Stressed":   20,
-        "Tired":      22,
-        "Surprised":   6,
-        "Focused":    18,
-        "Distracted": 18,
+        "Neutral":     8,   # easy to fall back to neutral baseline
+        "Happy":      10,
+        "Sad":        15,
+        "Angry":      18,
+        "Stressed":   15,
+        "Tired":      15,
+        "Surprised":   4,
+        "Focused":    10,
+        "Distracted": 25,   # needs sustained evidence — inflated by slow frame rate
     }
 
     # Transition penalty matrix.
@@ -146,11 +147,11 @@ class EmotionEngine:
         },
     }
 
-    CONFIDENCE_THRESHOLD = 0.18   # minimum normalised share to commit
-    WARM_UP_FRAMES       = 60     # ~2 s calibration before is_stable
-    INERTIA_BONUS        = 0.05   # reduced so strong DL signal can overcome current state
-    TIMELINE_LEN         = 1800   # 60 s at 30 fps
-    TREND_WINDOW         = 900    # 30 s window for dominant trend
+    CONFIDENCE_THRESHOLD = 0.14   # lower threshold so Neutral can commit easily
+    WARM_UP_FRAMES       = 20     # calibrate in 20 frames (~20 s at 1 fps)
+    INERTIA_BONUS        = 0.05
+    TIMELINE_LEN         = 1800
+    TREND_WINDOW         = 900
 
     def __init__(self):
         k = len(EMOTION_STATES)
@@ -432,12 +433,13 @@ class EmotionEngine:
         )
 
         # ── Distracted ────────────────────────────────────────────────
-        # Movement-driven, not pose-driven. A still angled head (looking
-        # down when sad, or just resting) should NOT score as Distracted.
+        # Require BOTH active movement AND significant yaw to avoid false
+        # positives from natural micro-movements at low frame-rate.
+        distracted_gate = f.head_movement_score * f.head_yaw_norm
         scores["Distracted"] = _w(
-            (0.20, f.head_yaw_norm),        # reduced: tilt alone ≠ distracted
-            (0.55, f.head_movement_score),  # primary signal: active fidgeting
-            (0.25, fat * 0.55),
+            (0.55, distracted_gate),         # only fires when truly fidgeting + looking away
+            (0.25, f.head_movement_score * 0.6),
+            (0.20, fat * 0.40),
         )
 
         # ── Neutral ───────────────────────────────────────────────────
