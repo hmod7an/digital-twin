@@ -376,8 +376,10 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json(result)
 
             except Exception as exc:
-                log.error(f"Frame error: {exc}")
-                await ws.send_json({"type": "error", "message": str(exc)[:300]})
+                import traceback
+                tb = traceback.format_exc()
+                log.error(f"Frame error: {exc}\n{tb}")
+                await ws.send_json({"type": "error", "message": str(exc)[:300], "traceback": tb[-600:]})
 
     except WebSocketDisconnect:
         log.info("Client disconnected")
@@ -446,6 +448,35 @@ async def debug():
         "MESA_GL_VERSION_OVERRIDE": os.environ.get("MESA_GL_VERSION_OVERRIDE", "NOT SET"),
     }
 
+    return result
+
+
+@app.get("/debug/pipeline")
+async def debug_pipeline():
+    """Run a synthetic 480x360 black frame through the full pipeline and report errors."""
+    import traceback
+    import asyncio
+
+    def _run():
+        try:
+            session = _new_session()
+        except Exception as exc:
+            return {"stage": "new_session", "error": str(exc), "traceback": traceback.format_exc()[-800:]}
+
+        try:
+            bgr = np.zeros((360, 480, 3), dtype=np.uint8)
+            result = _process_frame(bgr, session)
+            return {
+                "stage": "complete",
+                "face_ok": result.get("face_ok"),
+                "tick": result.get("tick"),
+                "has_annotated": bool(result.get("annotated")),
+                "deep_ok": result.get("deep_ok"),
+            }
+        except Exception as exc:
+            return {"stage": "process_frame", "error": str(exc), "traceback": traceback.format_exc()[-800:]}
+
+    result = await asyncio.get_event_loop().run_in_executor(_EXECUTOR, _run)
     return result
 
 
