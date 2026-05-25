@@ -404,6 +404,51 @@ async def status():
     return {"python": sys.version, "packages": checks}
 
 
+@app.get("/debug")
+async def debug():
+    """Deep diagnostic — checks model files and pipeline init."""
+    import os
+    from pathlib import Path
+
+    result = {}
+
+    # Face landmarker model
+    mp_model = Path(_ROOT) / "core" / "models" / "face_landmarker.task"
+    result["face_landmarker"] = {
+        "exists": mp_model.exists(),
+        "size_kb": round(mp_model.stat().st_size / 1024) if mp_model.exists() else 0,
+        "path": str(mp_model),
+    }
+
+    # ONNX models
+    onnx_dir = os.path.expanduser("~/.hsemotion")
+    result["onnx_models"] = {}
+    for fname in _ONNX_MODELS:
+        p = os.path.join(onnx_dir, fname)
+        result["onnx_models"][fname] = {
+            "exists": os.path.exists(p),
+            "size_kb": round(os.path.getsize(p) / 1024) if os.path.exists(p) else 0,
+        }
+
+    # Try initialising FaceTracker
+    try:
+        from core.face_tracker import FaceTracker
+        ft = FaceTracker()
+        ft.close()
+        result["face_tracker_init"] = "OK"
+    except Exception as exc:
+        result["face_tracker_init"] = f"ERROR: {exc}"
+
+    # GL env vars
+    result["env"] = {
+        "LIBGL_ALWAYS_SOFTWARE": os.environ.get("LIBGL_ALWAYS_SOFTWARE", "NOT SET"),
+        "EGL_PLATFORM": os.environ.get("EGL_PLATFORM", "NOT SET"),
+        "MESA_GL_VERSION_OVERRIDE": os.environ.get("MESA_GL_VERSION_OVERRIDE", "NOT SET"),
+    }
+
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
