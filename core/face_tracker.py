@@ -107,6 +107,22 @@ class FaceTracker:
         landmarks.head_pose_angles = self._estimate_head_pose(raw, w, h)
         return landmarks
 
+    def refresh_roi_colors(self, frame: np.ndarray, landmarks: FaceLandmarks) -> FaceLandmarks:
+        """Re-sample skin-colour ROIs from a new frame using cached pixel coords.
+
+        Skips the expensive MediaPipe inference — used on alternate frames so
+        rPPG gets fresh colour data without paying full detection cost.
+        """
+        import copy
+        lm = copy.copy(landmarks)
+        lm.forehead_roi   = self._extract_roi(frame, landmarks.pixel_coords,
+                                               settings.rppg.forehead_landmarks)
+        lm.left_cheek_roi  = self._extract_roi(frame, landmarks.pixel_coords,
+                                                settings.rppg.left_cheek_landmarks)
+        lm.right_cheek_roi = self._extract_roi(frame, landmarks.pixel_coords,
+                                                settings.rppg.right_cheek_landmarks)
+        return lm
+
     def draw_landmarks(self, frame: np.ndarray, landmarks: FaceLandmarks) -> np.ndarray:
         """Draw face oval and ROI polygons on frame."""
         annotated = frame.copy()

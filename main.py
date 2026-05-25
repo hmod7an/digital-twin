@@ -161,7 +161,17 @@ def _process_frame(bgr: np.ndarray, session: dict) -> dict:
     P = _get_pipeline()
     EMOTION_COLOR = P["EMOTION_COLOR"]
 
-    landmarks  = session["tracker"].process(bgr)
+    # Run full MediaPipe detection every other frame; refresh only skin-colour
+    # ROIs on alternate frames (~5 ms vs ~350 ms for full detection).
+    tick_now = session["tick"]  # read before increment (incremented later)
+    if tick_now % 2 == 0 or session.get("last_landmarks") is None:
+        landmarks = session["tracker"].process(bgr)
+        if landmarks is not None:
+            session["last_landmarks"] = landmarks
+    else:
+        cached = session.get("last_landmarks")
+        landmarks = session["tracker"].refresh_roi_colors(bgr, cached) if cached is not None else None
+
     face_feats = session["features"].extract(landmarks)
 
     rppg_r    = session["rppg"].update(landmarks)
