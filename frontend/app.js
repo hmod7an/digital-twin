@@ -245,7 +245,11 @@ const App = (() => {
     if (d.type === "rec_state") { updateRecordingBadge(d.recording); return; }
     if (d.type === "rec_cleared") { recRecords = []; renderRecordTable(); return; }
     if (d.type === "csv") { downloadCsvBlob(d.data); return; }
-    if (d.type === "error") { console.warn("Backend error:", d.message); return; }
+    if (d.type === "error") {
+      console.warn("Backend error:", d.message);
+      showAnnotatedError(d.message);
+      return;
+    }
     if (d.type !== "frame") return;
 
     updateHeader(d);
@@ -489,6 +493,18 @@ const App = (() => {
     const img = $("annotated");
     img.src = `data:image/jpeg;base64,${b64}`;
     img.style.display = "";
+    // Ensure overlay is hidden once we have real frames
+    const ov = $("ann-overlay");
+    if (ov) ov.style.display = "none";
+  }
+
+  function showAnnotatedError(msg) {
+    const ov = $("ann-overlay");
+    if (!ov) return;
+    ov.style.display = "";
+    ov.innerHTML = `<div style="color:#FF4B4B;font-size:12px;padding:8px;text-align:center;max-width:300px">
+      ⚠️ Backend error:<br><code style="font-size:10px;word-break:break-all">${msg}</code>
+    </div>`;
   }
 
   // ── Charts ────────────────────────────────────────────────────────────────────

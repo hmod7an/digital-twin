@@ -60,10 +60,17 @@ def _download_models():
                 log.warning(f"Could not download {fname}: {exc}")
 
 
-# ── Lifespan: download models before first request ────────────────────────────
+# ── Lifespan: download all models and warm up MediaPipe before first request ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _download_models()
+    # Download face landmarker model now so startup logs capture any failure
+    try:
+        from core.model_manager import ensure_face_landmarker
+        model_path = ensure_face_landmarker()
+        log.info(f"Face landmarker model ready: {model_path}")
+    except Exception as exc:
+        log.error(f"FATAL: Face landmarker model unavailable: {exc}")
     yield
 
 
