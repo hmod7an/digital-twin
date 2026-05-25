@@ -3,9 +3,9 @@
 // ── Constants ────────────────────────────────────────────────────────────────
 const FRAME_INTERVAL_MS = 100;   // 10 fps to backend
 const RECONNECT_DELAY_MS = 3000;
-const CAPTURE_W = 480;
-const CAPTURE_H = 360;
-const JPEG_QUALITY = 0.80;
+const CAPTURE_W = 320;
+const CAPTURE_H = 240;
+const JPEG_QUALITY = 0.65;
 
 const EMOTION_STATES = [
   "Neutral","Happy","Sad","Angry","Stressed","Tired","Surprised","Focused","Distracted"
@@ -31,6 +31,8 @@ const App = (() => {
   let fpsAccum = [];
   let lastFrameTime = 0;
   let recRecords = [];
+  let txCount = 0;
+  let rxCount = 0;
 
   // Chart instances
   let chartRppg = null;
@@ -156,10 +158,12 @@ const App = (() => {
       setBanner("connected", "✅ Connected — backend ready");
       setTimeout(() => hideBanner(), 2000);
       $("conn-retry").style.display = "none";
+      setWsBadge("OPEN");
     };
 
     ws.onclose = () => {
       ws = null;
+      setWsBadge("CLOSED");
       setBanner("disconnected", `⚠️ Disconnected — reconnecting in ${RECONNECT_DELAY_MS / 1000}s…`);
       $("conn-retry").style.display = "";
       reconnectTimer = setTimeout(() => {
@@ -169,11 +173,14 @@ const App = (() => {
     };
 
     ws.onerror = () => {
+      setWsBadge("ERR");
       setBanner("error", "❌ Connection error — check backend URL in config.js");
     };
 
     ws.onmessage = evt => {
       try {
+        rxCount++;
+        setText("badge-rx", `↓${rxCount}`);
         const data = JSON.parse(evt.data);
         handleMessage(data);
       } catch (e) { /* ignore malformed */ }
@@ -189,7 +196,19 @@ const App = (() => {
   function sendJson(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
+      if (obj.frame) {
+        txCount++;
+        setText("badge-tx", `↑${txCount}`);
+      }
     }
+  }
+
+  function setWsBadge(state) {
+    const el = $("badge-ws");
+    if (!el) return;
+    const cls = { OPEN: "badge-green", CLOSED: "badge-red", ERR: "badge-red", "…": "badge-warn" };
+    el.className = `badge ${cls[state] || "badge-warn"}`;
+    el.textContent = `WS:${state}`;
   }
 
   // ── Camera ────────────────────────────────────────────────────────────────────
