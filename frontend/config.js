@@ -7,7 +7,7 @@
  * For local development:
  *   BACKEND_WS = "ws://localhost:8000/ws"
  */
-window.BACKEND_WS = "wss://face-health-digital-twin.onrender.com/ws";
+window.BACKEND_WS = "wss://digital-twin-gagg.onrender.com/ws";
 
 // For local development, comment the line above and uncomment:
 // window.BACKEND_WS = "ws://localhost:8000/ws";
