@@ -84,8 +84,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Thread pool so synchronous CV/AI code doesn't block the event loop
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
+# Single worker: free tier has 0.5 CPU; one frame at a time is faster than contention
+_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
 
 
 # ── Lazy imports (deferred until after model download) ───────────────────────

@@ -33,6 +33,7 @@ const App = (() => {
   let recRecords = [];
   let txCount = 0;
   let rxCount = 0;
+  let pendingFrame = false;  // rate-gate: only one frame in-flight at a time
 
   // Chart instances
   let chartRppg = null;
@@ -237,6 +238,7 @@ const App = (() => {
 
   function captureAndSend() {
     if (!cameraActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pendingFrame) return;  // previous frame still processing — skip this tick
 
     const video = $("webcam");
     if (!video.videoWidth) return;
@@ -248,6 +250,7 @@ const App = (() => {
     ctx.drawImage(video, 0, 0, CAPTURE_W, CAPTURE_H);
 
     const b64 = canvas.toDataURL("image/jpeg", JPEG_QUALITY).split(",")[1];
+    pendingFrame = true;
     sendJson({ frame: b64 });
 
     // Client-side FPS measurement
@@ -261,6 +264,7 @@ const App = (() => {
 
   // ── Message handler ──────────────────────────────────────────────────────────
   function handleMessage(d) {
+    pendingFrame = false;  // ungate — ready for next frame
     if (d.type === "rec_state") { updateRecordingBadge(d.recording); return; }
     if (d.type === "rec_cleared") { recRecords = []; renderRecordTable(); return; }
     if (d.type === "csv") { downloadCsvBlob(d.data); return; }

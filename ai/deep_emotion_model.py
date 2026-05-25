@@ -17,18 +17,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _MODEL_DIR = os.path.expanduser("~/.hsemotion")
 
-# (filename, AffectNet class list, ensemble weight)
+# Single model for free-tier deployment — vgaf is the most balanced.
+# Use all three when running on hardware with adequate CPU/GPU.
 _MODELS: List[Tuple[str, List[str], float]] = [
     ("enet_b0_8_best_vgaf.onnx",
      ["Anger", "Contempt", "Disgust", "Fear", "Happiness", "Neutral", "Sadness", "Surprise"],
      1.0),
-    ("enet_b0_8_best_afew.onnx",
-     ["Anger", "Contempt", "Disgust", "Fear", "Happiness", "Neutral", "Sadness", "Surprise"],
-     1.0),
-    # Larger EfficientNet-B2 backbone; 7 classes (no Contempt) — weighted 0.8
-    ("enet_b2_7.onnx",
-     ["Anger", "Disgust", "Fear", "Happiness", "Neutral", "Sadness", "Surprise"],
-     0.8),
 ]
 
 # Refined AffectNet → our 9-state mapping (more discriminative than original)
@@ -51,8 +45,8 @@ _OUR_STATES = [
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-# Shared thread pool — reused across sessions (daemon so it exits cleanly)
-_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="onnx_infer")
+# Shared thread pool — 1 worker matches single-model deployment
+_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="onnx_infer")
 
 
 def _build_providers() -> List[str]:
